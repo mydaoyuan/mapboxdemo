@@ -1,0 +1,298 @@
+
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Add a 3D model</title>
+    <meta
+      name="viewport"
+      content="initial-scale=1,maximum-scale=1,user-scalable=no"
+    />
+    <script src="https://api.tiles.mapbox.com/mapbox-gl-js/v1.6.0/mapbox-gl.js"></script>
+    <link
+      href="https://api.tiles.mapbox.com/mapbox-gl-js/v1.6.0/mapbox-gl.css"
+      rel="stylesheet"
+    />
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+      }
+      #map {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r118/three.min.js"></script>
+    <script id="vertexShader" type="x-shader/x-vertex">
+
+      varying vec2 vUv;
+
+      void main()	{
+
+      	vUv = uv;
+
+      	gl_Position = projectionMatrix * (modelViewMatrix * vec4( position, 1.0 ));
+
+      }
+    </script>
+
+    <script id="fragmentShader" type="x-shader/x-fragment">
+      varying vec2 vUv;
+
+      uniform float iTime;
+      uniform vec3 color;
+      void main()	{
+      	vec2 uv = -1.0 + 2.0 * vUv;
+      	float time = iTime * 0.3 + 0.0*0.01;
+      	// To create the BG pattern
+      	vec3 wave_color = vec3(0.0);
+      	// To create the waves
+      	float wave_width = 0.01;
+      	uv.y -= 0.8;
+      	for(float i = 0.0; i < 5.0; i++) {
+
+          // uv.y += cos(i * 2.0 + iTime ) > 0.0 ? sin(i * 2.0 + iTime ) : -sin(i * 2.0 + iTime ) ;
+          // 控制线条运动方式。  sin 内部控制速度    外面控制幅度
+          uv.y +=  sin(i * 2.3 + iTime ) * 1.0 ;
+          // 控制线条宽度
+      		wave_width = abs(1.0 / (40.0 * uv.y));
+      		wave_color += vec3(wave_width , wave_width * 3.9, wave_width * 4.5);
+      	}
+        gl_FragColor = vec4(wave_color, ((wave_color.r + wave_color.g + wave_color.b) / 4.0) - 0.2);
+      }
+    </script>
+    <div id="map"></div>
+    <script>
+      var uniforms = {
+        iTime: {
+          type: 'f',
+          value: 1.0
+        }
+      }
+      function findOrigin(pointArr) {
+        let min = pointArr.reduce((min, item, index) => {
+          if (item.lt < min) {
+            min = item.lt
+          }
+          return min
+        }, pointArr[0].lt)
+        // 多个维度相同的情况
+        let minItems = pointArr
+          .filter(i => i.lt == min)
+          .sort((a, b) => a.ln - b.ln)[0]
+        return minItems
+      }
+      const ali = [
+        { ln: 120.18669699897104, lt: 30.195734047408006 },
+        { ln: 120.18481867562849, lt: 30.19657615976094 },
+        { ln: 120.18359146384691, lt: 30.19639727074671 },
+        { ln: 120.1843631355107, lt: 30.190991367324166 },
+        { ln: 120.18775940533932, lt: 30.1911974675611 }
+      ]
+      const { ln: minln, lt: minlt } = findOrigin(ali)
+      const relativePosition = ali.map(item => {
+        return {
+          ln: (item.ln - minln) * 10000,
+          lt: (item.lt - minlt) * 10000
+        }
+      })
+
+      const center = ali
+        .reduce(
+          (a, b) => {
+            a[0] = a[0] + b.ln
+            a[1] = a[1] + b.lt
+            return a
+          },
+          [0, 0]
+        )
+        .map(i => i / ali.length)
+      mapboxgl.accessToken =
+        'pk.eyJ1IjoibXlzb21lIiwiYSI6ImNrMzhkeGM3cTAxM2czZHFldmxkOWQ3N2gifQ.LHODCWg-jAbqBZmOOHtnqQ'
+      var map = (window.map = new mapboxgl.Map({
+        container: 'map',
+        style: 'mapbox://styles/mysome/ck47tr3xs01n61cmdku8zmw9a',
+        zoom: 18,
+        center: center,
+        pitch: 60,
+        antialias: true // create the gl context with MSAA antialiasing, so custom layers are antialiased
+      }))
+
+      // parameters to ensure the model is georeferenced correctly on the map
+      var modelOrigin = [minln, minlt] // 最大x 最小y
+      // var modelOrigin = [120.18775940533932, 30.1911974675611]
+      var modelAltitude = 0
+      var modelRotate = [Math.PI / 2, 0, 0]
+
+      var modelAsMercatorCoordinate = mapboxgl.MercatorCoordinate.fromLngLat(
+        modelOrigin,
+        modelAltitude
+      )
+
+      // transformation parameters to position, rotate and scale the 3D model onto the map
+      var modelTransform = {
+        translateX: modelAsMercatorCoordinate.x,
+        translateY: modelAsMercatorCoordinate.y,
+        translateZ: modelAsMercatorCoordinate.z,
+        rotateX: modelRotate[0],
+        rotateY: modelRotate[1],
+        rotateZ: modelRotate[2],
+        /* Since our 3D model is in real world meters, a scale transform needs to be
+         * applied since the CustomLayerInterface expects units in MercatorCoordinates.
+         */
+        scale: modelAsMercatorCoordinate.meterInMercatorCoordinateUnits()
+      }
+
+      var THREE = window.THREE
+
+      // configuration of the custom layer for a 3D model per the CustomLayerInterface
+      var customLayer = {
+        id: '3d-model',
+        type: 'custom',
+        renderingMode: '3d',
+        onAdd: function(map, gl) {
+          this.camera = new THREE.Camera()
+          this.scene = new THREE.Scene()
+          var axesHelper = new THREE.AxesHelper(800)
+          this.scene.add(axesHelper)
+
+          // create two three.js lights to illuminate the model
+          var directionalLight = new THREE.DirectionalLight(0xffffff)
+          directionalLight.position.set(0, -70, 100).normalize()
+          this.scene.add(directionalLight)
+
+          var directionalLight2 = new THREE.DirectionalLight(0xffffff)
+          directionalLight2.position.set(0, 70, 100).normalize()
+          this.scene.add(directionalLight2)
+
+          this.map = map
+
+          getShapN(this.scene)
+
+          // use the Mapbox GL JS map canvas for three.js
+          this.renderer = new THREE.WebGLRenderer({
+            canvas: map.getCanvas(),
+            context: gl,
+            antialias: true
+          })
+
+          this.renderer.autoClear = false
+        },
+        render: function(gl, matrix) {
+          var rotationX = new THREE.Matrix4().makeRotationAxis(
+            new THREE.Vector3(1, 0, 0),
+            modelTransform.rotateX
+          )
+          var rotationY = new THREE.Matrix4().makeRotationAxis(
+            new THREE.Vector3(0, 1, 0),
+            modelTransform.rotateY
+          )
+          var rotationZ = new THREE.Matrix4().makeRotationAxis(
+            new THREE.Vector3(0, 0, 1),
+            modelTransform.rotateZ
+          )
+
+          var m = new THREE.Matrix4().fromArray(matrix)
+          var l = new THREE.Matrix4()
+            .makeTranslation(
+              modelTransform.translateX,
+              modelTransform.translateY,
+              modelTransform.translateZ
+            )
+            .scale(
+              new THREE.Vector3(
+                modelTransform.scale,
+                -modelTransform.scale,
+                modelTransform.scale
+              )
+            )
+            .multiply(rotationX)
+            .multiply(rotationY)
+            .multiply(rotationZ)
+
+          this.camera.projectionMatrix = m.multiply(l)
+          this.renderer.state.reset()
+          uniforms.iTime.value += 0.05
+          this.renderer.render(this.scene, this.camera)
+          this.map.triggerRepaint()
+        }
+      }
+
+      map.on('style.load', function() {
+        map.addLayer(customLayer, 'waterway-label')
+      })
+
+      function getShapN(scene) {
+        // var material = new THREE.MeshBasicMaterial({
+        //   color: 0xffff00,
+        //   side: THREE.DoubleSide
+        // })
+        var material = new THREE.ShaderMaterial({
+          uniforms: uniforms,
+          transparent: true,
+          side: 2,
+          vertexShader: document.getElementById('vertexShader').textContent,
+          fragmentShader: document.getElementById('fragmentShader').textContent
+        })
+        let wareGroup = new THREE.Group()
+        let height = 10
+        // 形状的坐标数据
+        const shapArr = relativePosition
+        for (let index = 0; index < shapArr.length; index++) {
+          const item = shapArr[index]
+          const nextItem =
+            index + 1 == shapArr.length ? shapArr[0] : shapArr[index + 1]
+          // 计算出两点的距离
+          const length = getTwoPointLength(item, nextItem)
+          // 根据形状构建mesh
+          let mesh = new THREE.Mesh(
+            new THREE.PlaneGeometry(length, height),
+            material
+          )
+          // 获取到两点之间，中心点的坐标
+          const pos = getMiddlePos(item, nextItem)
+          // 计算出两点之间的旋转角度
+          const roate = Math.asin((nextItem.ln - pos.ln) / (length / 2))
+          console.log(item, nextItem, pos)
+          // 设置mesh的坐标
+          mesh.position.x = pos.ln
+          mesh.position.z = pos.lt
+          mesh.position.y = height / 2
+          if (nextItem.lt - pos.lt > 0) {
+            mesh.rotation.y = Math.PI / 2 + roate
+          } else {
+            mesh.rotation.y = Math.PI / 2 - roate
+          }
+          wareGroup.add(mesh)
+        }
+        let beishu = 5
+        wareGroup.scale.x = 10
+        wareGroup.scale.z = 11
+        wareGroup.scale.y = beishu
+        // 镜像反转
+        wareGroup.rotation.x = Math.PI * -1
+        wareGroup.position.y = beishu * height
+        scene.add(wareGroup)
+      }
+
+      function getTwoPointLength(a, b) {
+        // 勾股定理
+        let width = Math.abs(a.ln - b.ln)
+        let height = Math.abs(a.lt - b.lt)
+        return Math.hypot(width, height)
+      }
+      function getMiddlePos(a, b) {
+        return {
+          ln: (a.ln + b.ln) / 2,
+          lt: (a.lt + b.lt) / 2
+        }
+      }
+    </script>
+  </body>
+</html>
+
